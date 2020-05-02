@@ -1,0 +1,130 @@
+//env.PROJECT_GIT_NAME = 'GLOBALBI_POC'
+//env.JOB = 'test'
+//env.VERSION = '0.1'
+//env.GIT_URL = ''
+env.GIT_URL = ''
+//env.imageName = ''
+env.registry= ''
+
+
+//Credentials IDs (Manage Jenkins => Credentials)
+//env.GIT_CREDENTIALS_ID = 'REPONAME'
+env.GIT_CREDENTIALS_ID = 'REPONAME'
+
+properties([
+  pipelineTriggers([
+  [$class: 'GenericTrigger',
+   genericVariables:[
+    [
+     key: 'ref_name',
+     value: '$.changes[:1].refId'
+     expressionType: 'JSONPath'
+    ],
+    [
+     key: 'ref_name',
+     value: '$.changes[:1].refId'
+     expressionType: 'JSONPath'
+    ]
+   ],
+  causeString: 'Triggered on $ref_name',
+
+  token: ''
+
+  printContributedVariables: true,
+  printPostContent: true,
+   silentResponse: false,
+
+   regexpFilterTest: '$ref_name_0',
+   regexpFilterExpression: 'refs/heads/master'
+  ]
+ ])
+])
+
+node {
+    //clean workspace before doing anything
+    try {
+        //cleanWs()
+        stage ('Git checkout') {
+            git(
+                url: "${GIT_URL}", 
+                credentialsID: "${GIT_CREDENTIALS_ID}",
+                branch: 'master'
+            )
+            mvnHome = tool 'mvn'
+        }
+        stage (' Read Envinorment Variables') {
+            script{
+                def props = readproperties file:'env.properties'
+                env['PROJECT_GIT_NAME'] = props['PROJECT_GIT_NAME']
+                env['JOB'] = props['JOB']
+                env['VERSION'] = props['VERSION']
+                env['GIT_URL'] = props['GIT_URL']
+                env['imageName'] = props['imageName']
+                //env['registry'] = props['registry']
+                //sh "$PROJECT_GIT_NAME"
+                println "${registry}"
+                //sh "$registry"
+            }
+        }
+        stage ('Build and publish Jobs to TMC') {
+                    withMaven(
+                            // Maven installation declared in the Jenkins "Global Tool Configuration"
+                            maven: 'mvn',
+                            // Maven settings.xml file defined with the Jenkins config File provider plugin
+                            //Maven settings and global settings can also be defined in Jenkins Global Tools Configuration
+                            //mavenSettingsConfig: 'maven-file',
+                             mavenOpts: '-Dupdatesite.path=http://35.154.220.20.8082/p2/ -Dlicense.path=/opt/remote.license -Dgeneration.type=local -Dservice.url=https://tmc.ap.cloud.talend.com/inventory/ -Dcloud.publisher.environment=TALEND_CICD_TEST -Dcloud.publisher.workspace=TALENDCICDTEST -Dservice.username=mansoorahmed.shaik@mail.nissan.co.jp -Dservice.password=chaitu5784 -Dcloud.publisher.screenshot=true -DaltDeploymentRepository=id::default::http://admin123@13.127.206.141:8081/repository/thirdparty/ -Xmx1024m -Xmx3096m'
+                             {
+
+                        //run the maven test Build
+                        sh "mvn -s /opt/settings.xml -f $PROJECT_GIT_NAME/poms/pom.xml clean -Pcloud-publisher deploy"
+
+                        }
+        }
+        /*
+        stage ('Sonar Metrics') {
+                    withMaven(
+                            // maven insatllation declared in the jenkins "Global Tool Configuration"
+                            maven: 'mvn',
+                            // Maven settings.xml file defined with the Jenkins config File provider plugin
+                            //Maven settings and global settings can also be defined in Jenkins Global Tools Configuration
+                            //mavenSettingsConfig: 'maven-file',
+                            mavenOpts: '-Dupdatesite.path=http://35.154.220.20.8082/p2/ -Dlicense.path=/opt/remote.license -Dgeneration.type=local -Dservice.url=https://tmc.ap.cloud.talend.com/inventory/ -Dcloud.publisher.environment=TALEND_CICD_TEST -Dcloud.publisher.workspace=TALENDCICDTEST -Dservice.username=mansoorahmed.shaik@mail.nissan.co.jp -Dservice.password=chaitu5784 -Dcloud.publisher.screenshot=true -DaltDeploymentRepository=id::default::http://admin123@13.127.206.141:8081/repository/thirdparty/ -Xmx1024m -Xmx3096m'
+                            {
+
+                        // Run the maven Build
+                        sh "mvn -s /opt/settings.xml -f $PROJECT_GIT_NAME/poms/pom.xml sonar:sonar -Dsonar.host.url=http:13.126.94.105:9000/"
+
+                        }
+        }*/
+         stage ('building the docker image') {
+               script{
+                    dir("./GLOBALTEST") {
+                    docker.build(imageName, "-f Dockerfile .")                    }
+                    }
+         }
+    }
+    stage("push to registry" {
+            script {
+                sh "eval \$(aws ecr get-login --region ap-south-1 --no-include-email)"
+                sh "aws ecr describe-repositories --region ap-south-1 --repository-names $imagename || aws ecr create-repository --region ap-south-1 --repository-name $imageName"
+                docker.withRegistry(registry) {
+                    docker.image(imagename).push('latest)
+                }
+                //sh "/var/lib/jenkins/bin/aws ecr list-images --region $REGION --repository-name $imageName --filter tagStatus=UNTAGGED --query 'imageIDs[*]' --output text | while read imageId; do /var/lib/jenkins/bin/aws ecr batch-delete-image --region $REGION --repository-name $imageName --image-ids imageDigest=\$imageId; done"
+            }
+        }
+      stage(Deploy to DEV") {
+            script {
+                sh "eval \$(aws ecr get-login --region ap-south-1 --no-include-email)"
+                sh "/usr/bin/aws --version"
+                sh "/usr/bin/aws ecs register-task-definition --cli-input-json file://IB%-taskdef-js.json"
+                // sh "/usr/bin/aws ecs run-task --cluster IB5-Talendcicd-cluster-demo --count 1 --launch-type FARGATE --network-Configuration awsvpcconfiguration={subnets=[subnet-015ea77f6d4584ac7],securityGroups=[sg-036076fbc4e9ed4d1],assipublicIp=ENABLE} --task-defination fargate-task-definition"
+            }
+      }
+
+    } catch (err) {
+        surrentBuild.result = 'FAILED'
+        throw err
+    }
+} 
